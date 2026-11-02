@@ -1,0 +1,118 @@
+{
+    "version": 1,
+    "type": "machine-learning",
+    "info": {
+        "name": "Floor / obstacle segmentation",
+        "description": "Semantic segmentation (floor vs obstacle) for robot navigation. Decodes the run-box labels written by the Segmentation Labeler extension and trains a MobileNetV2 + LR-ASPP network with a FOMO-compatible output, so it deploys like FOMO.",
+        "operatesOn": "object_detection",
+        "objectDetectionLastLayer": "fomo",
+        "imageInputScaling": "0..1",
+        "indRequiresGpu": false
+    },
+    "parameters": [
+        {
+            "name": "Number of training cycles",
+            "value": "60",
+            "type": "int",
+            "help": "Epochs. With a few hundred images, 60-100 is a good range.",
+            "param": "epochs"
+        },
+        {
+            "name": "Learning rate",
+            "value": "0.001",
+            "type": "float",
+            "help": "Initial Adam learning rate; decays with a cosine schedule.",
+            "param": "learning-rate"
+        },
+        {
+            "name": "Batch size",
+            "value": "16",
+            "type": "int",
+            "param": "batch-size"
+        },
+        {
+            "name": "Backbone width",
+            "value": "0.35",
+            "type": "select",
+            "valid": ["0.35", "0.5", "0.75", "1.0"],
+            "help": "MobileNetV2 width multiplier. 0.35 is the fastest on the Arduino UNO Q CPU.",
+            "param": "backbone-width"
+        },
+        {
+            "name": "Ignore class",
+            "value": "exclude",
+            "type": "select",
+            "valid": [
+                { "label": "Exclude from training (loss weight 0)", "value": "exclude" },
+                { "label": "Treat as obstacle", "value": "obstacle" }
+            ],
+            "help": "How pixels labeled \"ignore\" are trained.",
+            "param": "ignore-mode"
+        },
+        {
+            "name": "Obstacle threshold per cell",
+            "value": "0.25",
+            "type": "float",
+            "help": "An output cell is trained as obstacle if at least this share of its labeled area is obstacle. Lower = more cautious.",
+            "param": "obstacle-threshold"
+        },
+        {
+            "name": "Obstacle loss weight",
+            "value": "2.0",
+            "type": "float",
+            "help": "Extra weight on obstacle cells: missing an obstacle costs more than a false alarm.",
+            "param": "obstacle-weight"
+        },
+        {
+            "name": "Data augmentation",
+            "value": true,
+            "type": "boolean",
+            "help": "Horizontal flips, zoom crops, lighting and noise. No vertical flips or rotation.",
+            "param": "augmentation"
+        },
+        {
+            "name": "Output resolution",
+            "value": "8",
+            "type": "select",
+            "valid": [
+                { "label": "1/8 of the input (FOMO, deployable)", "value": "8" },
+                { "label": "1/4 of the input (experimental)", "value": "4" }
+            ],
+            "help": "1/8 matches FOMO and deploys through Edge Impulse. 1/4 is finer but not verified with Edge Impulse deployment.",
+            "param": "output-stride",
+            "section": "advanced"
+        },
+        {
+            "name": "Labeler classes",
+            "value": "floor,obstacle,ignore",
+            "type": "string",
+            "help": "Class names in the Segmentation Labeler's order (Settings tab). Must match the extension.",
+            "param": "classes",
+            "section": "advanced"
+        },
+        {
+            "name": "Default class",
+            "value": "floor",
+            "type": "string",
+            "help": "The class the labeler never writes as boxes.",
+            "param": "default-class",
+            "section": "advanced"
+        },
+        {
+            "name": "Label grid columns",
+            "value": "160",
+            "type": "int",
+            "help": "Must match the labeler's grid (Settings tab).",
+            "param": "grid-cols",
+            "section": "advanced"
+        },
+        {
+            "name": "Label grid rows",
+            "value": "120",
+            "type": "int",
+            "help": "Must match the labeler's grid (Settings tab).",
+            "param": "grid-rows",
+            "section": "advanced"
+        }
+    ]
+}

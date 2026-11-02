@@ -1,0 +1,9 @@
+.venv
+.git
+ei-block-data
+data
+out
+tests
+**/__pycache__
+.pytest_cache
+*.md

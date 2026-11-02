@@ -1,0 +1,6 @@
+# TensorFlow 2.15 = Keras 2: the stable path to SavedModel + int8 TFLite.
+# [and-cuda] brings the CUDA libraries, so the same image trains on GPU when
+# Studio gives it one, and on CPU otherwise.
+tensorflow[and-cuda]==2.15.1; platform_system == "Linux" and platform_machine == "x86_64"
+tensorflow==2.15.1; platform_system != "Linux" or platform_machine != "x86_64"
+numpy<2
