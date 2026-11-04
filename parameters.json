@@ -7,7 +7,8 @@
         "operatesOn": "object_detection",
         "objectDetectionLastLayer": "fomo",
         "imageInputScaling": "0..1",
-        "indRequiresGpu": false
+        "indRequiresGpu": false,
+        "repositoryUrl": "https://github.com/mpous/semantic-segmentation-custom-learning-block"
     },
     "parameters": [
         {
@@ -34,7 +35,12 @@
             "name": "Backbone width",
             "value": "0.35",
             "type": "select",
-            "valid": ["0.35", "0.5", "0.75", "1.0"],
+            "valid": [
+                "0.35",
+                "0.5",
+                "0.75",
+                "1.0"
+            ],
             "help": "MobileNetV2 width multiplier. 0.35 is the fastest on the Arduino UNO Q CPU.",
             "param": "backbone-width"
         },
@@ -43,8 +49,14 @@
             "value": "exclude",
             "type": "select",
             "valid": [
-                { "label": "Exclude from training (loss weight 0)", "value": "exclude" },
-                { "label": "Treat as obstacle", "value": "obstacle" }
+                {
+                    "label": "Exclude from training (loss weight 0)",
+                    "value": "exclude"
+                },
+                {
+                    "label": "Treat as obstacle",
+                    "value": "obstacle"
+                }
             ],
             "help": "How pixels labeled \"ignore\" are trained.",
             "param": "ignore-mode"
@@ -75,8 +87,14 @@
             "value": "8",
             "type": "select",
             "valid": [
-                { "label": "1/8 of the input (FOMO, deployable)", "value": "8" },
-                { "label": "1/4 of the input (experimental)", "value": "4" }
+                {
+                    "label": "1/8 of the input (FOMO, deployable)",
+                    "value": "8"
+                },
+                {
+                    "label": "1/4 of the input (experimental)",
+                    "value": "4"
+                }
             ],
             "help": "1/8 matches FOMO and deploys through Edge Impulse. 1/4 is finer but not verified with Edge Impulse deployment.",
             "param": "output-stride",
