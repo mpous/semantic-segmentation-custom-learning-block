@@ -61,6 +61,17 @@ F1 score, which doesn't measure segmentation. The real numbers are:
   written next to the models and to the block's custom data folder, where you can download it from the
   training job.
 
+Live classification and *Model testing* also draw the result as FOMO: adjacent obstacle cells
+merge into one box with a dot at its centre, so a correct mask looks like a single wrong detection.
+To see the mask itself, download `model_quantized_int8_io.tflite` from the dashboard and run:
+
+```bash
+.venv/bin/python scripts/visualize.py model_quantized_int8_io.tflite photos/ --out out/vis
+```
+
+Each PNG shows the squashed input next to the mask (red = obstacle), one cell per output value.
+`--threshold 0.3` marks a cell obstacle from 30% probability, to preview a more cautious setting.
+
 ## Run locally
 
 ```bash
@@ -84,7 +95,8 @@ edge-impulse-blocks push
 ```
 
 Then, in your project: set the labeling method to *Bounding boxes*, create an impulse (Image data
-320×240, resize mode **Squash**, Image block, this learning block) and train.
+320×320, resize mode **Squash**, Image block, this learning block) and train. Keep the input
+square: Studio's FOMO tools (live classification, model testing) reject other shapes.
 
 ## Limitations
 
