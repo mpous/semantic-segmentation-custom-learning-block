@@ -1,4 +1,4 @@
-"""Floor / obstacle segmentation learning block: entry point.
+"""Semantic segmentation learning block: entry point.
 
 Studio runs this with ``--data-directory``, ``--out-directory``,
 ``--info-file`` and the parameters in parameters.json. See README.md.
@@ -17,7 +17,7 @@ import numpy as np
 import tensorflow as tf
 
 from seg import data as D
-from seg.classes import IGNORE_MODES, make_spec
+from seg.classes import make_spec
 from seg.export import export_all, run_tflite
 from seg.losses import make_loss, unpack
 from seg.metrics import confusion, format_summary, summarize
@@ -44,16 +44,16 @@ def parse_args(argv=None):
     p.add_argument("--augmentation", type=int, default=1, choices=(0, 1))
     p.add_argument("--pretrained", type=int, default=1, choices=(0, 1))
 
-    p.add_argument("--classes", type=csv, default=csv("floor,obstacle,ignore"),
-                   help="labeler classes in the extension's order (class id = position)")
-    p.add_argument("--default-class", default="floor")
-    p.add_argument("--ignore-class", default="ignore")
-    p.add_argument("--obstacle-class", default="obstacle")
-    p.add_argument("--ignore-mode", default="exclude", choices=IGNORE_MODES)
+    # The classes are Studio's labels (train_input.json) plus the background.
+    p.add_argument("--background-name", default="background",
+                   help="name for channel 0: the extension's default class, which has no boxes")
+    p.add_argument("--ignore-label", default="ignore",
+                   help="label whose cells are left out of training (blank = none)")
     p.add_argument("--grid-cols", type=int, default=160)
     p.add_argument("--grid-rows", type=int, default=120)
-    p.add_argument("--obstacle-threshold", type=float, default=0.25)
-    p.add_argument("--obstacle-weight", type=float, default=2.0)
+    p.add_argument("--class-threshold", type=float, default=0.25,
+                   help="share of a cell's labeled area a class needs to be its target")
+    p.add_argument("--foreground-weight", type=float, default=2.0)
     p.add_argument("--studio-labels", type=csv, default=[],
                    help="local runs only: Studio's label list (Studio passes it in train_input.json)")
     p.add_argument("--seed", type=int, default=1)
@@ -94,10 +94,10 @@ def per_sample(sample_ids, target, weight, probs, names, trained):
     rows = []
     for i, sid in enumerate(sample_ids):
         s = summarize(confusion(target[i:i + 1], weight[i:i + 1], probs[i:i + 1]), names, trained)
-        rows.append({"sampleId": sid, "mean_iou": s["mean_iou"], "false_floor_rate": s["false_floor_rate"],
+        rows.append({"sampleId": sid, "mean_iou": s["mean_iou"], "missed_rate": s["missed_rate"],
                      "accuracy": s["accuracy"]})
-    # Worst first: missed obstacles, then low IoU.
-    return sorted(rows, key=lambda r: (-(r["false_floor_rate"] or 0), r["mean_iou"] if r["mean_iou"] is not None else 1))
+    # Worst first: missed objects, then low IoU.
+    return sorted(rows, key=lambda r: (-(r["missed_rate"] or 0), r["mean_iou"] if r["mean_iou"] is not None else 1))
 
 
 def main(argv=None) -> int:
@@ -109,13 +109,15 @@ def main(argv=None) -> int:
 
     y_train = D.read_boxes(data_dir / "Y_split_train.npy")
     y_val = D.read_boxes(data_dir / "Y_split_test.npy")
-    labels = D.resolve_labels(info, args.studio_labels, args.classes, args.default_class,
-                              D.max_label(y_train, y_val))
-    spec = make_spec(args.classes, args.default_class, labels, args.ignore_class,
-                     args.obstacle_class, args.ignore_mode)
+    labels = D.resolve_labels(info, args.studio_labels, D.max_label(y_train, y_val))
+    try:
+        spec = make_spec(labels, args.background_name, args.ignore_label.strip() or None)
+    except ValueError as ex:
+        raise SystemExit(str(ex)) from None
 
     x_train = D.load_images(data_dir / "X_split_train.npy", shape)
     x_val = D.load_images(data_dir / "X_split_test.npy", shape)
+    D.check_grid([y_train, y_val], x_train.shape[1], args.grid_rows)
     train = D.decode_split(x_train, y_train, spec, args.grid_cols, args.grid_rows)
     val = D.decode_split(x_val, y_val, spec, args.grid_cols, args.grid_rows) if len(x_val) else None
 
@@ -124,7 +126,8 @@ def main(argv=None) -> int:
         raise SystemExit("No training samples")
     out_hw = (h // args.output_stride, w // args.output_stride)
     print(f"Input {w}x{h}x{c}, output {out_hw[1]}x{out_hw[0]} (1/{args.output_stride}), "
-          f"channels {spec.channel_names}, ignore mode {spec.ignore_mode}", flush=True)
+          f"classes {spec.channel_names}"
+          + (f", {spec.names[spec.ignore_class]!r} left out of training" if spec.ignore_class else ""), flush=True)
     print(f"{n} training samples, {len(val.images) if val else 0} validation samples", flush=True)
 
     model = build_model(h, w, c, spec.num_channels, args.backbone_width, args.output_stride,
@@ -132,12 +135,12 @@ def main(argv=None) -> int:
     model.summary(print_fn=lambda s: print(s, flush=True), line_length=110)
 
     batch = min(args.batch_size, n)
-    train_ds = D.make_dataset(train, spec, out_hw, args.obstacle_threshold, batch, bool(args.augmentation))
-    val_ds = D.make_dataset(val, spec, out_hw, args.obstacle_threshold, batch, False) if val else None
+    train_ds = D.make_dataset(train, spec, out_hw, args.class_threshold, batch, bool(args.augmentation))
+    val_ds = D.make_dataset(val, spec, out_hw, args.class_threshold, batch, False) if val else None
 
     steps = max(1, math.ceil(n / batch)) * max(1, args.epochs)
     lr = tf.keras.optimizers.schedules.CosineDecay(args.learning_rate, steps, alpha=0.05)
-    model.compile(optimizer=tf.keras.optimizers.Adam(lr), loss=make_loss(args.obstacle_weight))
+    model.compile(optimizer=tf.keras.optimizers.Adam(lr), loss=make_loss(args.foreground_weight))
 
     t0 = time.time()
     model.fit(train_ds, validation_data=val_ds, epochs=args.epochs, verbose=2,
@@ -152,7 +155,7 @@ def main(argv=None) -> int:
         "v": 1,
         "block": "semantic-segmentation-custom-learning-block",
         "channels": spec.channel_names,
-        "ignore_mode": spec.ignore_mode,
+        "ignore": spec.names[spec.ignore_class] if spec.ignore_class else None,
         "input": {"width": w, "height": h, "channels": c, "scaling": "0..1"},
         "output": {"width": out_hw[1], "height": out_hw[0], "stride": args.output_stride},
         "label_grid": {"cols": args.grid_cols, "rows": args.grid_rows},

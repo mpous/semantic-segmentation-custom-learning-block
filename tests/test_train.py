@@ -11,8 +11,9 @@ from seg.export import INT8_FILE, run_tflite
 W, H, COLS, ROWS = 64, 48, 16, 12
 
 
-def runboxes(grid, labels):
-    """Minimal run-box encoder (rows of equal class -> boxes), like the extension's."""
+def runboxes(grid, labels, names):
+    """Minimal run-box encoder (rows of equal class -> boxes), like the extension's.
+    ``names``: grid value -> label name (0 = background, never written)."""
     cw, ch = W / COLS, H / ROWS
     boxes = []
     for r in range(ROWS):
@@ -22,33 +23,41 @@ def runboxes(grid, labels):
             while c < COLS and grid[r, c] == v:
                 c += 1
             if v:
-                boxes.append({"label": labels.index({1: "obstacle", 2: "ignore"}[v]) + 1,
+                boxes.append({"label": labels.index(names[v]) + 1,
                               "x": round(start * cw), "y": round(r * ch),
                               "w": round((c - start) * cw), "h": round(ch)})
     return boxes
 
 
-def make_project(path, n, seed, labels):
+ROBOT = {1: "obstacle", 2: "ignore"}
+FOOTBALL = {1: "teamA", 2: "teamB", 3: "ball", 4: "referee"}
+COLOURS = [(0.1, 0.1, 0.8), (0.8, 0.1, 0.1), (0.9, 0.9, 0.9), (0.1, 0.1, 0.1)]
+
+
+def make_project(n, seed, labels, names, ignore_strip):
     rng = np.random.default_rng(seed)
     xs, ys = [], []
     for i in range(n):
         grid = np.zeros((ROWS, COLS), np.uint8)
-        img = np.full((H, W, 3), (0.6, 0.55, 0.5), np.float32)       # floor
-        r0, c0 = rng.integers(0, ROWS - 4), rng.integers(0, COLS - 4)
-        grid[r0:r0 + 4, c0:c0 + 4] = 1
-        img[r0 * 4:(r0 + 4) * 4, c0 * 4:(c0 + 4) * 4] = (0.1, 0.1, 0.8)  # obstacle
-        grid[0, :] = 2                                                  # ignore strip
+        img = np.full((H, W, 3), (0.6, 0.55, 0.5), np.float32)        # background
+        for v in names if not ignore_strip else [1]:
+            if names[v] == "ignore":
+                continue
+            r0, c0 = rng.integers(1, ROWS - 3), rng.integers(0, COLS - 3)
+            grid[r0:r0 + 3, c0:c0 + 3] = v
+            img[r0 * 4:(r0 + 3) * 4, c0 * 4:(c0 + 3) * 4] = COLOURS[v - 1]
+        if ignore_strip:
+            grid[0, :] = 2
         xs.append(img)
-        ys.append({"sampleId": seed * 1000 + i, "boundingBoxes": runboxes(grid, labels)})
+        ys.append({"sampleId": seed * 1000 + i, "boundingBoxes": runboxes(grid, labels, names)})
     return np.stack(xs), ys
 
 
-def test_train_end_to_end(tmp_path):
-    labels = ["ignore", "obstacle"]
+def train_project(tmp_path, labels, names, ignore_strip, extra=()):
     data = tmp_path / "data"
     data.mkdir()
     for split, n, seed in (("train", 24, 1), ("test", 8, 2)):
-        x, y = make_project(data, n, seed, labels)
+        x, y = make_project(n, seed, labels, names, ignore_strip)
         np.save(data / f"X_split_{split}.npy", x)
         (data / f"Y_split_{split}.npy").write_text(json.dumps(y))
     (tmp_path / "train_input.json").write_text(json.dumps({"classes": labels, "inputShapeString": f"({H}, {W}, 3)"}))
@@ -58,13 +67,18 @@ def test_train_end_to_end(tmp_path):
         "--data-directory", str(data), "--out-directory", str(out),
         "--info-file", str(tmp_path / "train_input.json"), "--custom-data-directory", str(tmp_path / "cd"),
         "--epochs", "3", "--pretrained", "0", "--grid-cols", str(COLS), "--grid-rows", str(ROWS),
-        "--batch-size", "8",
+        "--batch-size", "8", *extra,
     ]) == 0
+    return out, json.loads((tmp_path / "cd" / "metrics.json").read_text())
+
+
+def test_train_end_to_end(tmp_path):
+    out, report = train_project(tmp_path, ["ignore", "obstacle"], ROBOT, True, ["--background-name", "floor"])
 
     for f in ("model.tflite", INT8_FILE, "saved_model.zip", "metrics.json"):
         assert (out / f).is_file(), f
-    report = json.loads((tmp_path / "cd" / "metrics.json").read_text())
     assert report["channels"] == ["floor", "ignore", "obstacle"]
+    assert report["ignore"] == "ignore"
     assert report["output"] == {"width": W // 8, "height": H // 8, "stride": 8}
     assert {"float", "int8", "per_sample"} <= report.keys()
     assert len(report["per_sample"]) == 8
@@ -75,3 +89,22 @@ def test_train_end_to_end(tmp_path):
     assert list(interp.get_output_details()[0]["shape"]) == [1, H // 8, W // 8, 3]
     probs = run_tflite(out / INT8_FILE, np.zeros((1, H, W, 3), np.uint8))
     np.testing.assert_allclose(probs.sum(-1), 1.0, atol=0.02)
+
+
+def test_classes_come_from_studio_labels(tmp_path):
+    # Any label set, no ignore class: e.g. a football project.
+    labels = ["ball", "referee", "teamA", "teamB"]
+    out, report = train_project(tmp_path, labels, FOOTBALL, False)
+    assert report["channels"] == ["background", *labels]
+    assert report["ignore"] is None
+    assert set(report["int8"]["iou"]) == {"background", *labels}
+    interp = tf.lite.Interpreter(model_path=str(out / INT8_FILE))
+    assert list(interp.get_output_details()[0]["shape"]) == [1, H // 8, W // 8, 5]
+
+    # The mask preview names the classes from metrics.json.
+    from scripts import visualize
+    img = tmp_path / "frame.png"
+    img.write_bytes(tf.io.encode_png(np.full((H, W, 3), 128, np.uint8)).numpy())
+    assert visualize.main([str(out / INT8_FILE), str(img), "--out", str(tmp_path / "vis"),
+                           "--metrics", str(tmp_path / "cd" / "metrics.json"), "--threshold", "0.3"]) == 0
+    assert (tmp_path / "vis" / "frame.png").is_file()

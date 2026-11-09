@@ -5,7 +5,7 @@ a learning block receives nothing else about a sample (no metadata, no
 network). Its contract, from the extension README ("Data format"):
 
 * The image is split into a ``cols`` x ``rows`` grid (default 160 x 120).
-* Every cell starts as the default class (``floor``).
+* Every cell starts as the default class (the background).
 * Each box with a known label sets every cell whose *centre* lies inside the
   box to the box's class. Later boxes win where boxes overlap.
 

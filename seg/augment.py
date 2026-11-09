@@ -1,8 +1,8 @@
 """Augmentation, applied to the image and its label grid together.
 
-Only what a robot camera can actually see: horizontal flips, zoom-in crops
-and lighting/colour/noise changes. No vertical flips and no rotation, since
-the floor is always at the bottom of the frame.
+Only what a fixed, upright camera can actually see: horizontal flips,
+zoom-in crops and lighting/colour/noise changes. No vertical flips and no
+rotation, since the ground is always at the bottom of the frame.
 """
 
 from __future__ import annotations
