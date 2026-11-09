@@ -13,7 +13,8 @@
 * ``sample_id_details.json``: sample ids per split (not needed here; Y has them).
 
 ``--info-file`` (``train_input.json``, not present in local runs) gives the
-label list in ``classes`` and the input shape in ``inputShapeString``.
+label list in ``classes`` and the input shape in ``inputShapeString``. That
+label list is the model's class list (see classes.py).
 """
 
 from __future__ import annotations
@@ -84,18 +85,15 @@ def load_images(path: Path, shape: tuple[int, ...] | None) -> np.ndarray:
     return np.round(np.asarray(x, np.float32) * 255.0).astype(np.uint8)
 
 
-def resolve_labels(info: dict, override: Sequence[str], spec_names: Sequence[str],
-                   default_class: str, max_label: int) -> list[str]:
-    """Studio's label list: train_input.json, else --studio-labels, else a guess (local runs)."""
+def resolve_labels(info: dict, override: Sequence[str], max_label: int) -> list[str]:
+    """Studio's label list: train_input.json, else --studio-labels, else placeholders (local runs)."""
     if info.get("classes"):
-        return list(info["classes"])
+        return [str(c) for c in info["classes"]]
     if override:
         return list(override)
-    # Studio sorts labels alphabetically; the labeler's non-default classes,
-    # cut to the highest label index in the data, is the best local guess.
-    guess = sorted(n for n in spec_names if n != default_class)[:max(max_label, 1)]
-    print(f"No train_input.json (local run): assuming Studio labels {guess}. "
-          "Pass --studio-labels to override.", flush=True)
+    guess = [f"label{i}" for i in range(1, max(max_label, 1) + 1)]
+    print(f"No train_input.json (local run): naming the labels {guess}. "
+          "Pass --studio-labels (Studio's labels, sorted) to name them.", flush=True)
     return guess
 
 
@@ -103,24 +101,34 @@ def max_label(*ys: list[dict]) -> int:
     return max((b["label"] for y in ys for s in y for b in s.get("boundingBoxes", [])), default=0)
 
 
+def check_grid(ys: Sequence[list[dict]], height: int, rows: int) -> None:
+    """Warn when the boxes aren't one label-grid row high: the grid settings don't match the extension's."""
+    heights = [b["h"] for y in ys for s in y for b in s.get("boundingBoxes", [])]
+    if not heights:
+        return
+    seen, expected = float(np.median(heights)), height / rows
+    if abs(seen - expected) > 0.5 * expected + 1:
+        print(f"Warning: boxes are typically {seen:g} px high, but a {rows}-row label grid on a "
+              f"{height} px input gives {expected:.2f} px rows. Set the label grid rows/columns to "
+              "the extension's (Classes tab → Learning block settings).", flush=True)
+
+
 def decode_split(x: np.ndarray, y: list[dict], spec: ClassSpec, cols: int, rows: int) -> Split:
     if len(y) != len(x):
         raise SystemExit(f"{len(x)} images but {len(y)} label entries")
     h, w = x.shape[1:3]
+    labels = spec.studio_labels
     grids = np.empty((len(y), rows, cols), np.uint8)
-    unknown: set[str] = set()
     for i, s in enumerate(y):
         boxes = []
         for b in s.get("boundingBoxes", []):
             idx = int(b["label"]) - 1
-            if not 0 <= idx < len(spec.studio_labels):
+            if not 0 <= idx < len(labels):
                 raise SystemExit(f"Sample {s.get('sampleId')}: label index {b['label']} is outside "
-                                 f"the label list {list(spec.studio_labels)}")
-            boxes.append(Box(spec.studio_labels[idx], b["x"], b["y"], b["w"], b["h"]))
-        grids[i], unk = decode_boxes(boxes, spec.names, spec.default_class, cols, rows, w, h)
-        unknown |= unk
-    if unknown:
-        print(f"Warning: boxes with labels {sorted(unknown)} were ignored (not labeler classes)", flush=True)
+                                 f"the label list {list(labels)}")
+            boxes.append(Box(labels[idx], b["x"], b["y"], b["w"], b["h"]))
+        # Class id = channel: 0 is the background, Studio label i is i + 1.
+        grids[i], _ = decode_boxes(boxes, spec.names, 0, cols, rows, w, h)
     return Split(x, grids, [int(s.get("sampleId", -1)) for s in y])
 
 

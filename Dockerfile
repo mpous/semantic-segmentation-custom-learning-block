@@ -1,4 +1,4 @@
-# Floor / obstacle segmentation learning block.
+# Semantic segmentation learning block (any classes).
 # Studio runs it without network access: everything, including the
 # pretrained weights, is in the image.
 FROM python:3.11-slim

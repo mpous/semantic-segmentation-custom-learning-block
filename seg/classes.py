@@ -1,16 +1,18 @@
-"""Classes: how labeler classes map to model output channels.
+"""Classes: Studio's label list -> model output channels.
 
-The labeler has three classes by default: ``floor`` (the default class, never
-written as a box), ``obstacle`` and ``ignore``. Studio only knows the labels
-that appear on boxes, so its label list is e.g. ``["ignore", "obstacle"]``.
+The classes are whatever the project is labeled with. Studio passes its label
+list (sorted, only labels that appear on boxes) in ``train_input.json``; the
+labeler's default class never appears there, because the extension doesn't
+write it as boxes: it is every pixel no box covers.
 
-The model output follows the FOMO convention so Edge Impulse can deploy it:
-channel 0 is the background (our default class, ``floor``) and channel
-``i + 1`` is Studio label ``i``. ``ignore`` keeps its channel when Studio has
-it (the deployment expects one per label) but is never a training target:
+The output follows the FOMO convention so Edge Impulse can deploy it:
+channel 0 is the background (the default class) and channel ``i + 1`` is
+Studio label ``i``. Decoded label grids use the same ids, so a grid value is
+the channel it trains.
 
-* ``exclude``: cells that are mostly ``ignore`` get loss weight 0;
-* ``obstacle``: ``ignore`` counts as ``obstacle``.
+An optional *ignore* label (the extension's ignore class) keeps its channel,
+since the deployment expects one per label, but is never a training target:
+cells that are mostly ignore get loss weight 0.
 """
 
 from __future__ import annotations
@@ -18,79 +20,52 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Sequence
 
-IGNORE_MODES = ("exclude", "obstacle")
-
 
 @dataclass(frozen=True)
 class ClassSpec:
-    #: Labeler classes; index = class id in the decoded grid.
+    #: Channel names: background first, then Studio's labels in Studio's order.
     names: tuple[str, ...]
-    default_class: int
-    #: Studio's label list, in Studio's order (output channel = index + 1).
-    studio_labels: tuple[str, ...]
+    #: Channel of the ignore label, if Studio has it.
     ignore_class: int | None
-    #: Class that ``ignore`` is merged into in ``obstacle`` mode.
-    obstacle_class: int | None
-    ignore_mode: str
+
+    @property
+    def studio_labels(self) -> tuple[str, ...]:
+        return self.names[1:]
 
     @property
     def num_channels(self) -> int:
-        return len(self.studio_labels) + 1
+        return len(self.names)
 
     @property
     def channel_names(self) -> list[str]:
-        return [self.names[self.default_class], *self.studio_labels]
+        return list(self.names)
 
-    def channel_of(self, k: int) -> int:
-        """Output channel for labeler class ``k``."""
-        if k == self.default_class:
-            return 0
-        return self.studio_labels.index(self.names[k]) + 1
+    @property
+    def foreground(self) -> list[int]:
+        """Channels a cell can be trained as besides the background."""
+        return [c for c in range(1, self.num_channels) if c != self.ignore_class]
 
     @property
     def trained_channels(self) -> list[int]:
-        """Channels that are ever a target: all but ``ignore``'s, if it has one."""
-        ignore = None
-        if self.ignore_class is not None and self.names[self.ignore_class] in self.studio_labels:
-            ignore = self.channel_of(self.ignore_class)
-        return [c for c in range(self.num_channels) if c != ignore]
+        """Channels that are ever a target: all but the ignore label's."""
+        return [c for c in range(self.num_channels) if c != self.ignore_class]
 
 
-def make_spec(
-    names: Sequence[str],
-    default_class: str,
-    studio_labels: Sequence[str],
-    ignore_class: str | None = "ignore",
-    obstacle_class: str | None = "obstacle",
-    ignore_mode: str = "exclude",
-) -> ClassSpec:
-    names = tuple(names)
-    if len(set(names)) != len(names):
-        raise ValueError(f"Class names must be unique: {names}")
-    if default_class not in names:
-        raise ValueError(f'Default class "{default_class}" is not in the class list {list(names)}')
-    if ignore_mode not in IGNORE_MODES:
-        raise ValueError(f"ignore mode must be one of {IGNORE_MODES}, not {ignore_mode!r}")
-
-    studio_labels = tuple(studio_labels)
-    if default_class in studio_labels:
+def make_spec(studio_labels: Sequence[str], background: str = "background",
+              ignore_label: str | None = "ignore") -> ClassSpec:
+    labels = tuple(studio_labels)
+    if not labels:
+        raise ValueError("The project has no labeled boxes. Label some samples with the extension first.")
+    if len(set(labels)) != len(labels):
+        raise ValueError(f"Studio labels must be unique: {list(labels)}")
+    background = background.strip() or "background"
+    if background in labels:
         raise ValueError(
-            f'Studio has boxes labeled "{default_class}", the default class. The labeler never '
-            "writes those; remove them or change the default class.")
-    unknown = [s for s in studio_labels if s not in names]
-    if unknown:
-        raise ValueError(
-            f"Studio labels {unknown} are not labeler classes {list(names)}. "
-            "Set the class list in the block parameters to match the extension's settings.")
-
-    ig = names.index(ignore_class) if ignore_class and ignore_class in names else None
-    ob = names.index(obstacle_class) if obstacle_class and obstacle_class in names else None
-    if ig is not None and ignore_mode == "obstacle" and ob is None:
-        raise ValueError(f'ignore mode "obstacle" needs a class named "{obstacle_class}"')
-    for k, n in enumerate(names):
-        if k != names.index(default_class) and n not in studio_labels and k != ig:
-            # A class nobody has used yet: it can't be deployed without a channel.
-            raise ValueError(
-                f'Class "{n}" has no boxes in this project yet, so the model has no output for it. '
-                "Label at least one sample with it, or remove it from the class list.")
-    return ClassSpec(names, names.index(default_class), studio_labels, ig, ob, ignore_mode)
+            f'Studio has boxes labeled "{background}", the name given to the background (default '
+            "class). The extension never writes the default class as boxes: set \"Background class "
+            "name\" to the extension's default class, or relabel those boxes.")
+    ig = labels.index(ignore_label) + 1 if ignore_label and ignore_label in labels else None
+    spec = ClassSpec((background, *labels), ig)
+    if not spec.foreground:
+        raise ValueError(f'Only the ignore label "{ignore_label}" has boxes: there is nothing to learn yet.')
+    return spec

@@ -2,8 +2,8 @@
     "version": 1,
     "type": "machine-learning",
     "info": {
-        "name": "Floor / obstacle segmentation",
-        "description": "Semantic segmentation (floor vs obstacle) for robot navigation. Decodes the run-box labels written by the Segmentation Labeler extension and trains a MobileNetV2 + LR-ASPP network with a FOMO-compatible output, so it deploys like FOMO.",
+        "name": "Semantic segmentation",
+        "description": "Semantic segmentation with any classes. Decodes the run-box labels written by the Segmentation Labeler extension (the classes are the project's labels plus the background) and trains a MobileNetV2 + LR-ASPP network with a FOMO-compatible output, so it deploys like FOMO.",
         "operatesOn": "object_detection",
         "objectDetectionLastLayer": "fomo",
         "imageInputScaling": "0..1",
@@ -45,35 +45,18 @@
             "param": "backbone-width"
         },
         {
-            "name": "Ignore class",
-            "value": "exclude",
-            "type": "select",
-            "valid": [
-                {
-                    "label": "Exclude from training (loss weight 0)",
-                    "value": "exclude"
-                },
-                {
-                    "label": "Treat as obstacle",
-                    "value": "obstacle"
-                }
-            ],
-            "help": "How pixels labeled \"ignore\" are trained.",
-            "param": "ignore-mode"
-        },
-        {
-            "name": "Obstacle threshold per cell",
+            "name": "Class threshold per cell",
             "value": "0.25",
             "type": "float",
-            "help": "An output cell is trained as obstacle if at least this share of its labeled area is obstacle. Lower = more cautious.",
-            "param": "obstacle-threshold"
+            "help": "An output cell is trained as a class if at least this share of its labeled area has that class (the largest one wins), otherwise as background. Lower keeps small objects.",
+            "param": "class-threshold"
         },
         {
-            "name": "Obstacle loss weight",
+            "name": "Foreground loss weight",
             "value": "2.0",
             "type": "float",
-            "help": "Extra weight on obstacle cells: missing an obstacle costs more than a false alarm.",
-            "param": "obstacle-weight"
+            "help": "Extra weight on cells of any class but the background: objects cover far fewer cells, and missing one costs more than a false alarm.",
+            "param": "foreground-weight"
         },
         {
             "name": "Data augmentation",
@@ -101,26 +84,27 @@
             "section": "advanced"
         },
         {
-            "name": "Labeler classes",
-            "value": "floor,obstacle,ignore",
+            "name": "Background class name",
+            "value": "background",
             "type": "string",
-            "help": "Class names in the Segmentation Labeler's order (Settings tab). Must match the extension.",
-            "param": "classes",
+            "help": "The extension's default class (Classes tab). It has no boxes, so Studio doesn't list it; this only names output channel 0.",
+            "param": "background-name",
             "section": "advanced"
         },
         {
-            "name": "Default class",
-            "value": "floor",
+            "name": "Ignore label",
+            "value": "ignore",
             "type": "string",
-            "help": "The class the labeler never writes as boxes.",
-            "param": "default-class",
+            "optional": true,
+            "help": "Cells mostly labeled with this are left out of training. Leave blank if the extension has no ignore class.",
+            "param": "ignore-label",
             "section": "advanced"
         },
         {
             "name": "Label grid columns",
             "value": "160",
             "type": "int",
-            "help": "Must match the labeler's grid (Settings tab).",
+            "help": "Must match the extension's label grid (Classes tab \u2192 Learning block settings).",
             "param": "grid-cols",
             "section": "advanced"
         },
@@ -128,7 +112,7 @@
             "name": "Label grid rows",
             "value": "120",
             "type": "int",
-            "help": "Must match the labeler's grid (Settings tab).",
+            "help": "Must match the extension's label grid (Classes tab \u2192 Learning block settings).",
             "param": "grid-rows",
             "section": "advanced"
         }
